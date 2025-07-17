@@ -8,7 +8,7 @@ echo "🚀 Начинаем развертывание LLM API"
 PROJECT_DIR="$HOME/llm-api"
 USER_ID=$(id -u)
 GROUP_ID=$(id -g)
-VLLM_MODEL=${VLLM_MODEL:-"matvei_pzh"}
+VLLM_MODEL=${VLLM_MODEL:-"/model"}
 API_PORT=${API_PORT:-8080}
 VLLM_PORT=${VLLM_PORT:-8000}
 
@@ -29,11 +29,23 @@ cp -r core/ services/ client.py app.py requirements.txt Dockerfile $PROJECT_DIR/
 # Создание .env файла
 echo "⚙️ Создание конфигурации..."
 cat > $PROJECT_DIR/.env << EOF
-VLLM_MODEL=$VLLM_MODEL
+# vLLM Configuration
 VLLM_API_URL=http://host.docker.internal:8000
+VLLM_MODEL=/model
 VLLM_TIMEOUT=120
-API_PORT=$API_PORT
-PYTHONUNBUFFERED=1
+
+# VLM 
+VLM_API_URL=http://host.docker.internal:8001
+
+# gen
+GEN_API_URL=http://host.docker.internal:8002
+
+# API Configuration
+API_HOST=0.0.0.0
+API_PORT=8080
+
+# Logging
+LOG_LEVEL=INFO
 EOF
 
 # Проверка Docker

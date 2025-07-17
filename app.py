@@ -4,57 +4,37 @@ import logging
 import time
 from datetime import datetime
 from contextlib import asynccontextmanager
-import os
-import re
 
 from core.models import *
 from core.context import context_manager, Message
 
 from services.functions import function_manager
 
-from client import vllm_client
+from client import vllm_client, VLLM_API_URL, VLLM_MODEL
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('app.log')
+    ]
 )
 logger = logging.getLogger(__name__)
 
-VLLM_API_URL = os.getenv("VLLM_API_URL", "http://localhost:8000")
-VLLM_MODEL = os.getenv("VLLM_MODEL", "matvei_pzh")
-VLLM_TIMEOUT = int(os.getenv("VLLM_TIMEOUT", "120"))
 
-async def parse_thinking(content: str) -> tuple[str, str]:
-    thinking_match = re.search(
-        r"(?:<think>\s*(.*?)\s*</think>)|(?:/think\s*(.*?)(?:/|$))",
-        content,
-        re.DOTALL | re.IGNORECASE
-    )
-    if thinking_match:
-        thinking_result = (thinking_match.group(1) or thinking_match.group(2) or "").strip()
-
-        text_result = re.sub(
-            r"(?:<think>\s*.*?\s*</think>)|(?:/think\s*.*?(?:/|$))",
-            "",
-            content,
-            flags=re.DOTALL | re.IGNORECASE
-        ).strip()
-    else:
-        thinking_result = ""
-        text_result = content
-
-    return thinking_result, text_result
 
 async def generate_with_functions(user_id: str, role: str, system_prompt: str, request: GenerateRequest):
     start_time = time.time()
     
-    context = context_manager.get_or_create_context(user_id, role)
+    context = await context_manager.get_or_create_context(user_id, role)
     
-    context_manager.add_or_update_system_message(user_id, system_prompt + function_manager.get_system_prompt_addition(), role)
+    await context_manager.add_or_update_system_message(user_id, system_prompt + await function_manager.get_system_prompt_addition(), role)
     
-    if request.image_base64:
-        logger.info(f"🖼️ Изображение прикреплено, но анализ недоступен")
-        context_manager.add_system_message(user_id, "[ИЗОБРАЖЕНИЕ]: Пользователь прикрепил изображение.", role)
+    function_manager.set_current_image(request.image)
+    
+    if request.image:
+        logger.info(f"🖼️ Изображение прикреплено и доступно для функций")
     
     logger.info(f"🔄 Генерация для {user_id} (роль: {role})")
     
@@ -87,18 +67,21 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
         choice = response_data["choices"][0]
         message = choice["message"]
         raw_content = message.get("content", "")
-        
-        is_need_functions = function_manager.is_need_functions(raw_content)
+        reasoning_content = message.get("reasoning_content", "")
+
+        is_need_functions = await function_manager.is_need_functions(raw_content)
         
         if is_need_functions:
             logger.info(f"🔧 Найдены вызовы функций в итерации {iteration_count}")
             
-            processed_text, functions_used, function_results = function_manager.parse_and_execute(raw_content)
+            function_manager.set_current_user_id(user_id)
+            
+            processed_text, functions_used, function_results = await function_manager.parse_and_execute(raw_content)
             
             all_functions_used.extend(functions_used)
             all_function_results.update(function_results)
             
-            content_without_calls = function_manager.remove_function_calls(raw_content)
+            content_without_calls = await function_manager.remove_function_calls(raw_content)
             
             current_messages.append({
                 "role": "assistant", 
@@ -122,11 +105,14 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
             final_content = raw_content
     
     processing_time = time.time() - start_time
-    clean_final_content = function_manager.remove_function_calls(final_content)
+    clean_final_content = await function_manager.remove_function_calls(final_content)
     
-    print(clean_final_content)
+    function_manager.set_current_image(None)
+    function_manager.set_current_user_id(None)
+    
     return {
         "content": clean_final_content,
+        "reasoning_content": reasoning_content,
         "functions_used": all_functions_used,
         "function_results": all_function_results,
         "iterations": iteration_count,
@@ -181,12 +167,14 @@ async def generate(request: GenerateRequest):
     try:
         logger.info(f"📝 Запрос от {request.user_id} (роль: {request.role})")
 
-        context_manager.add_user_message(request.user_id, request.message, request.role)
+        await context_manager.add_user_message(request.user_id, request.message, request.role)
         
         result = await generate_with_functions(request.user_id, request.role, request.system_prompt, request)
-        thinking_result, text_result = await parse_thinking(result["content"])
+        
+        text_result = result["content"]
+        thinking_result = result["reasoning_content"]
 
-        context_manager.add_assistant_message(
+        await context_manager.add_assistant_message(
             request.user_id,
             result["content"],
             request.role,
@@ -196,7 +184,14 @@ async def generate(request: GenerateRequest):
         
         logger.info(f"✅ Генерация завершена за {result['processing_time']:.2f}с")
         
-        context = context_manager.get_or_create_context(request.user_id, request.role)
+        context = await context_manager.get_or_create_context(request.user_id, request.role)
+        
+        images = []
+        for func_name, func_result in result["function_results"].items():
+            if func_name in ['text_to_image', 'image-text-to-image'] and isinstance(func_result, dict):
+                image_data = func_result.get('image')
+                if image_data:
+                    images.append(image_data)
         
         return GenerateResponse(
             message=text_result,
@@ -205,6 +200,7 @@ async def generate(request: GenerateRequest):
             role=request.role,
             function_calls=result["functions_used"],
             function_results=result["function_results"],
+            images=images,
             generation_time=result["processing_time"],
             message_count=len(context.messages),
             model_used=result["model"],
@@ -220,7 +216,7 @@ async def generate(request: GenerateRequest):
 
 @app.post("/context/info", response_model=ContextInfoResponse)
 async def get_context_info(request: ContextInfoRequest):
-    context_info = context_manager.get_context_info(request.user_id, request.role)
+    context_info = await context_manager.get_context_info(request.user_id, request.role)
     
     if not context_info:
         return ContextInfoResponse(
@@ -244,7 +240,7 @@ async def get_context_info(request: ContextInfoRequest):
 @app.post("/context/clear", response_model=ClearContextResponse)
 async def clear_context(request: ClearContextRequest):
     try:
-        context_manager.clear_context(request.user_id, request.role)
+        await context_manager.clear_context(request.user_id, request.role)
         role_str = f" (роль: {request.role})" if request.role else " (все роли)"
         
         return ClearContextResponse(
@@ -267,7 +263,7 @@ async def get_conversation_history(request: ConversationHistoryRequest):
         context = context_manager.contexts.get(context_key)
         
         if not context:
-            context = context_manager._load_context(request.user_id, request.role)
+            context = await context_manager._load_context(request.user_id, request.role)
     else:
         context = None
         for key, ctx in context_manager.contexts.items():
@@ -298,6 +294,54 @@ async def get_conversation_history(request: ConversationHistoryRequest):
         context_created_at=datetime.fromtimestamp(context.created_at).isoformat()
     )
 
+@app.post("/create_avatar", response_model=CreateAvatarResponse)
+async def create_avatar(request: CreateAvatarRequest):
+    try:
+        logger.info(f"🎨 Запрос на создание аватара: {request.json_data}")
+        
+        result = await function_manager.create_avatar(request.json_data)
+        
+        return CreateAvatarResponse(
+            success=result["success"],
+            prompt=result["prompt"],
+            image=result["image"],
+            error=result["error"]
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания аватара: {e}")
+        return CreateAvatarResponse(
+            success=False,
+            prompt="",
+            image=None,
+            error=f"Ошибка создания аватара: {str(e)}"
+        )
+
+@app.post("/create_characters", response_model=CreateCharactersResponse)
+async def create_characters(request: CreateCharactersRequest):
+    try:
+        logger.info(f"👤 Запрос на создание персонажа: {request.json_data}")
+        
+        result = await function_manager.create_characters(request.json_data)
+        
+        return CreateCharactersResponse(
+            success=result["success"],
+            system_prompt=result["system_prompt"],
+            init_message=result["init_message"],
+            subtitle=result["subtitle"],
+            error=result["error"]
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания персонажа: {e}")
+        return CreateCharactersResponse(
+            success=False,
+            system_prompt="",
+            init_message="",
+            subtitle="",
+            error=f"Ошибка создания персонажа: {str(e)}"
+        )
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8081)

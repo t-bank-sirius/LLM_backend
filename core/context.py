@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
+import aiofiles
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +59,13 @@ class ContextManager:
     def _get_file_path(self, user_id: str, role: str) -> Path:
         return self.storage_path / f"{user_id}_{role}.json"
     
-    def get_or_create_context(self, user_id: str, role: str) -> UserContext:
+    async def get_or_create_context(self, user_id: str, role: str) -> UserContext:
         context_key = self._get_context_key(user_id, role)
         
         if context_key in self.contexts:
             return self.contexts[context_key]
         
-        context = self._load_context(user_id, role)
+        context = await self._load_context(user_id, role)
         if context:
             self.contexts[context_key] = context
             logger.info(f"📂 Загружен контекст {context_key} ({len(context.messages)} сообщений)")
@@ -79,13 +80,13 @@ class ContextManager:
         )
         
         self.contexts[context_key] = context
-        self._save_context(context)
+        await self._save_context(context)
         
         logger.info(f"🆕 Создан новый контекст {context_key}")
         return context
     
-    def add_user_message(self, user_id: str, content: str, role: str) -> UserContext:
-        context = self.get_or_create_context(user_id, role)
+    async def add_user_message(self, user_id: str, content: str, role: str) -> UserContext:
+        context = await self.get_or_create_context(user_id, role)
         
         message = Message(
             role="user",
@@ -94,14 +95,14 @@ class ContextManager:
         )
         
         context.add_message(message)
-        self._save_context(context)
+        await self._save_context(context)
         
         return context
     
-    def add_assistant_message(self, user_id: str, content: str, role: str,
+    async def add_assistant_message(self, user_id: str, content: str, role: str,
                             function_calls: List[str] = None, 
                             function_results: Dict = None) -> UserContext:
-        context = self.get_or_create_context(user_id, role)
+        context = await self.get_or_create_context(user_id, role)
         
         message = Message(
             role="assistant",
@@ -112,12 +113,12 @@ class ContextManager:
         )
         
         context.add_message(message)
-        self._save_context(context)
+        await self._save_context(context)
         
         return context
     
-    def add_system_message(self, user_id: str, content: str, role: str) -> UserContext:
-        context = self.get_or_create_context(user_id, role)
+    async def add_system_message(self, user_id: str, content: str, role: str) -> UserContext:
+        context = await self.get_or_create_context(user_id, role)
         
         message = Message(
             role="system",
@@ -126,12 +127,12 @@ class ContextManager:
         )
         
         context.add_message(message)
-        self._save_context(context)
+        await self._save_context(context)
         
         return context
     
-    def add_or_update_system_message(self, user_id: str, content: str, role: str) -> UserContext:
-        context = self.get_or_create_context(user_id, role)
+    async def add_or_update_system_message(self, user_id: str, content: str, role: str) -> UserContext:
+        context = await self.get_or_create_context(user_id, role)
         
         system_message = Message(
             role="system",
@@ -145,11 +146,11 @@ class ContextManager:
             context.messages.insert(0, system_message)
         
         context.last_activity = time.time()
-        self._save_context(context)
+        await self._save_context(context)
         
         return context
     
-    def clear_context(self, user_id: str, role: str = None):
+    async def clear_context(self, user_id: str, role: str = None):
         if role is None:
             keys_to_remove = [key for key in self.contexts.keys() if key.startswith(f"{user_id}_")]
             for key in keys_to_remove:
@@ -172,7 +173,7 @@ class ContextManager:
                 
                 logger.info(f"🗑️ Очищен контекст {context_key}")
     
-    def get_context_info(self, user_id: str, role: str = None) -> Optional[Dict]:
+    async def get_context_info(self, user_id: str, role: str = None) -> Optional[Dict]:
         if role is None:    
             for key, context in self.contexts.items():
                 if context.user_id == user_id:
@@ -189,7 +190,7 @@ class ContextManager:
         context = self.contexts.get(context_key)
         
         if not context:
-            context = self._load_context(user_id, role)
+            context = await self._load_context(user_id, role)
             if not context:
                 return None
         
@@ -201,7 +202,7 @@ class ContextManager:
             "last_activity": datetime.fromtimestamp(context.last_activity).isoformat()
         }
     
-    def _save_context(self, context: UserContext):
+    async def _save_context(self, context: UserContext):
         try:
             file_path = self._get_file_path(context.user_id, context.role)
             
@@ -222,21 +223,22 @@ class ContextManager:
                 ]
             }
             
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(context_data, f, ensure_ascii=False, indent=2)
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(context_data, ensure_ascii=False, indent=2))
                 
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения контекста {context.user_id}_{context.role}: {e}")
     
-    def _load_context(self, user_id: str, role: str) -> Optional[UserContext]:
+    async def _load_context(self, user_id: str, role: str) -> Optional[UserContext]:
         try:
             file_path = self._get_file_path(user_id, role)
             
             if not file_path.exists():
                 return None
             
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                data = json.loads(content)
             
             messages = [
                 Message(

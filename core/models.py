@@ -8,15 +8,15 @@ class GenerateRequest(BaseModel):
     system_prompt: str = Field(..., description="Системный промпт для модели")
     
     max_tokens: int = Field(default=2048, ge=100, le=8192, description="Максимальное количество токенов")
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Температура генерации")
+    temperature: float = Field(default=0.65, ge=0.0, le=2.0, description="Температура генерации")
     top_p: float = Field(default=0.95, ge=0.0, le=1.0, description="Top-p sampling")
     repetition_penalty: float = Field(default=1.1, ge=1.0, le=2.0, description="Штраф за повторения")
     
-    image_base64: Optional[str] = Field(None, description="Изображение в формате base64")
+    image: Optional[str] = Field(None, description="Изображение в формате base64")
     
-    max_iterations: int = Field(default=3, ge=1, le=5, description="Максимальное количество итераций для функций")
+    max_iterations: int = Field(default=5, ge=1, le=5, description="Максимальное количество итераций для функций")
     
-    @validator("image_base64")
+    @validator("image")
     def validate_image(cls, v):
         if v:
             try:
@@ -38,6 +38,7 @@ class GenerateResponse(BaseModel):
     
     function_calls: List[str] = Field(default=[], description="Выполненные функции")
     function_results: Dict[str, Any] = Field(default={}, description="Результаты функций")
+    image: Optional[str] = Field(None, description="Сгенерированное изображение в base64")
     generation_time: float = Field(..., description="Время генерации в секундах")
     
     message_count: int = Field(..., description="Количество сообщений в контексте")
@@ -90,3 +91,23 @@ class ConversationHistoryResponse(BaseModel):
     messages: List[ConversationMessage] = Field(..., description="Список сообщений")
     total_messages: int = Field(..., description="Общее количество сообщений")
     context_created_at: str = Field(..., description="Время создания контекста")
+
+# Новые модели для create_avatar и create_characters
+class CreateAvatarRequest(BaseModel):
+    json_data: str = Field(..., description="JSON строка с данными для генерации аватара")
+
+class CreateAvatarResponse(BaseModel):
+    success: bool = Field(..., description="Успешность операции")
+    prompt: str = Field(..., description="Сгенерированный промпт для изображения")
+    image: Optional[str] = Field(None, description="Сгенерированное изображение в base64")
+    error: Optional[str] = Field(None, description="Ошибка если есть")
+
+class CreateCharactersRequest(BaseModel):
+    json_data: str = Field(..., description="JSON строка с данными для создания персонажа")
+
+class CreateCharactersResponse(BaseModel):
+    success: bool = Field(..., description="Успешность операции")
+    system_prompt: str = Field(..., description="Системный промпт для персонажа")
+    init_message: str = Field(..., description="Начальное сообщение персонажа")
+    subtitle: str = Field(..., description="Короткий подзаголовок персонажа")
+    error: Optional[str] = Field(None, description="Ошибка если есть")
