@@ -77,56 +77,32 @@ class FunctionManager:
         self.current_user_id: Optional[str] = None
         self.validator = FunctionValidator()
         
-        # 🖼️ КОНТЕКСТУАЛЬНАЯ ПАМЯТЬ ИЗОБРАЖЕНИЙ
-        self.image_context: Dict[str, List[Dict]] = {}  # user_id -> список изображений с метаданными
-        self.max_image_context = 5  # Храним последние 5 изображений на пользователя
+        self.image_context: Dict[str, List[Dict]] = {} 
+        self.max_image_context = 5  
         
         self._register_builtin_functions()
     
     def _add_image_to_context(self, user_id: str, image_data: str, prompt: str = "", action: str = "generated"):
-        """Добавить изображение в контекстуальную память"""
         if user_id not in self.image_context:
             self.image_context[user_id] = []
         
         image_entry = {
             "image": image_data,
             "prompt": prompt,
-            "action": action,  # "generated", "uploaded", "modified"
+            "action": action, 
             "timestamp": time.time()
         }
         
         self.image_context[user_id].append(image_entry)
         
-        # Ограничиваем количество сохраненных изображений
         if len(self.image_context[user_id]) > self.max_image_context:
             self.image_context[user_id] = self.image_context[user_id][-self.max_image_context:]
         
         logger.info(f"🖼️ Добавлено изображение в контекст для {user_id}: {action} - {prompt}")
     
-    def _get_latest_image_from_context(self, user_id: str) -> Optional[str]:
-        """Получить последнее изображение из контекста"""
-        if user_id not in self.image_context or not self.image_context[user_id]:
-            return None
-        
-        latest_image = self.image_context[user_id][-1]
-        logger.info(f"🖼️ Получено последнее изображение из контекста для {user_id}: {latest_image['action']} - {latest_image['prompt']}")
-        return latest_image["image"]
-    
-    def _should_use_context_image(self, user_message: str) -> bool:
-        """Определить, нужно ли использовать изображение из контекста"""
-        context_triggers = [
-            "что на картинке", "опиши изображение", "что там нарисовано", 
-            "что на фото", "опиши картинку", "что это за изображение",
-            "расскажи про картинку", "что вижу", "анализ изображения"
-        ]
-        
-        message_lower = user_message.lower()
-        return any(trigger in message_lower for trigger in context_triggers) and not self.current_image
-    
     def set_current_image(self, image: Optional[str]):
         self.current_image = image
         
-        # 🖼️ Сохраняем загруженное пользователем изображение в контекст
         if image and self.current_user_id:
             self._add_image_to_context(
                 self.current_user_id, 
@@ -143,7 +119,7 @@ class FunctionManager:
         self.schemas[schema.name] = schema
         logger.info(f"✅ Зарегистрирована функция: {schema.name}")
     
-    async def execute_function_safely(self, func_name: str, parameters: Dict[str, Any], original_message: str = "") -> FunctionResult:
+    async def execute_function_safely(self, func_name: str, parameters: Dict[str, Any]) -> FunctionResult:
         start_time = time.time()
         
         function_name_mapping = {}
@@ -174,10 +150,6 @@ class FunctionManager:
         
         try:
             func = self.functions[internal_func_name]
-            
-            # Для describe_image добавляем original_message если есть
-            if func_name == 'describe_image' and original_message:
-                parameters['original_message'] = original_message
             
             if asyncio.iscoroutinefunction(func):
                 if parameters:
@@ -241,24 +213,12 @@ class FunctionManager:
         weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
         return weekdays[datetime.now().weekday()]
     
-    async def describe_image(self, prompt: str = "", original_message: str = "") -> str:
-        target_image = self.current_image
-        
-        # 🖼️ УМНАЯ ЛОГИКА: если нет прикрепленного изображения, но запрос похож на анализ - берем из контекста
-        if not target_image and self.current_user_id:
-            # Используем original_message если есть, иначе prompt
-            message_to_check = original_message if original_message else prompt
-            if self._should_use_context_image(message_to_check):
-                context_image = self._get_latest_image_from_context(self.current_user_id)
-                if context_image:
-                    target_image = context_image
-                    logger.info("🖼️ Используем изображение из контекстуальной памяти для анализа")
-        
-        if not target_image:
-            return "❌ Изображение не предоставлено в запросе и не найдено в контексте. Для анализа изображения прикрепите изображение к сообщению или сначала сгенерируйте его."
+    async def describe_image(self, prompt: str = "") -> str:
+        if not self.current_image:
+            return "❌ Изображение не выбрано. Используйте get_image_from_context() для выбора изображения из контекста или прикрепите новое изображение."
         
         try:
-            result = await vlm_client.describe_image(target_image, prompt)
+            result = await vlm_client.describe_image(self.current_image, prompt)
             return result
         except Exception as e:
             return f"❌ Ошибка анализа изображения: {str(e)}"
@@ -276,7 +236,6 @@ class FunctionManager:
         try:
             result = await gen_api.prompt_to_image(prompt, style_key)
             if isinstance(result, dict) and 'image' in result:
-                # 🖼️ Сохраняем сгенерированное изображение в контекст
                 if self.current_user_id and result['image']:
                     self._add_image_to_context(
                         self.current_user_id, 
@@ -313,7 +272,6 @@ class FunctionManager:
         try:
             result = await gen_api.image_to_image(self.current_image, prompt, style_key)
             if isinstance(result, dict) and 'image' in result:
-                # 🖼️ Сохраняем модифицированное изображение в контекст
                 if self.current_user_id and result['image']:
                     self._add_image_to_context(
                         self.current_user_id, 
@@ -666,6 +624,25 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
             )
         )
         
+        self.register_function(
+            self.get_image_from_context,
+            FunctionSchema(
+                name="get_image_from_context",
+                description="Получить изображение из контекста по запросу. Можно указать 'последнее', 'первое', 'сгенерированное', 'загруженное', 'измененное' или ключевые слова из промпта.",
+                parameters={"required": ["query"]},
+                examples=["FUNCTION_CALL:get_image_from_context(query='последнее')", "FUNCTION_CALL:get_image_from_context(query='первое')", "FUNCTION_CALL:get_image_from_context(query='сгенерированное')", "FUNCTION_CALL:get_image_from_context(query='кот')"]
+            )
+        )
+
+        self.register_function(
+            self.list_images_in_context,
+            FunctionSchema(
+                name="list_images_in_context",
+                description="Показать список изображений, сохраненных в контексте пользователя.",
+                parameters={"required": []},
+                examples=["FUNCTION_CALL:list_images_in_context()"]
+            )
+        )
         
         logger.info(f"✅ Зарегистрировано {len(self.functions)} функций")
 
@@ -715,6 +692,8 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
 - add_face_to_db(text: str) - сохранить лицо в базу
 - text_to_image(prompt: str, style_key: str) - генерация изображения
 - image_text_to_image(prompt: str, style_key: str) - изменение изображения
+- get_image_from_context(query: str) - получить изображение из контекста по запросу
+- list_images_in_context() - показать список сохраненных изображений
 
 ТРИГГЕРЫ: "картинка", "изображение", "фото", "нарисуй", "покажи", "сгенерируй", "создай изображение", "что на фото"
 
@@ -749,6 +728,22 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
 🔹 Пользователь: "Как меня зовут?"
    Мышление: Нужна информация из памяти → get_memory
    Действие: FUNCTION_CALL:get_memory(query="имя пользователя")
+
+🔹 Пользователь: "Опиши то изображение, что я загружал"
+   Мышление: Нужно найти загруженное изображение → get_image_from_context, потом анализ
+   Действия:
+   1. FUNCTION_CALL:get_image_from_context(query="загруженное")
+   2. FUNCTION_CALL:describe_image()
+
+🔹 Пользователь: "Покажи все мои изображения"
+   Мышление: Нужен список изображений в контексте → list_images_in_context
+   Действие: FUNCTION_CALL:list_images_in_context()
+
+🔹 Пользователь: "Опиши картинку с котом"
+   Мышление: Нужно найти изображение с котом → get_image_from_context, потом анализ
+   Действия:
+   1. FUNCTION_CALL:get_image_from_context(query="кот")
+   2. FUNCTION_CALL:describe_image()
 
 ═══════════════════════════════════════════════════════════════
 
@@ -840,8 +835,6 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
             try:
                 parameters = {}
                 if params_str.strip():
-                    # Универсальный парсер именованных параметров
-                    # Ищем pattern: name="value" или name='value'
                     named_params = re.findall(r'(\w+)=(["\'])([^"\']*)\2', params_str)
                     for param_name, quote, param_value in named_params:
                         parameters[param_name] = param_value
@@ -849,7 +842,6 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
                     if named_params:
                         logger.info(f"🔧 Извлечены параметры для {function_name}: {parameters}")
                     
-                    # Если именованных параметров нет, используем старый метод для обратной совместимости
                     if not parameters:
                         param_matches = re.findall(r'"([^"]*)"', params_str)
                         if len(param_matches) >= 1 and function_name in ['text_to_image', 'image_text_to_image']:
@@ -857,7 +849,7 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
                             if len(param_matches) >= 2:
                                 parameters['style_key'] = param_matches[1]
                 
-                result = await self.execute_function_safely(function_name, parameters, original_user_message)
+                result = await self.execute_function_safely(function_name, parameters)
                 
                 functions_used.append(function_name)
                 function_results[function_name] = result.result
@@ -891,5 +883,96 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
     async def remove_function_calls(self, text: str) -> str:
         pattern = r'FUNCTION_CALL:([\w-]+)\([^)]*\)'
         return re.sub(pattern, '', text).strip()
+
+    async def get_image_from_context(self, query: str = "последнее") -> str:
+        """Получить изображение из контекста по запросу"""
+        if not self.current_user_id:
+            return "❌ Ошибка: не указан пользователь"
+            
+        if self.current_user_id not in self.image_context or not self.image_context[self.current_user_id]:
+            return "❌ В контексте нет сохраненных изображений"
+        
+        images = self.image_context[self.current_user_id]
+        
+        query_lower = query.lower()
+        
+        # Ищем по ключевым словам
+        if "последн" in query_lower or "недавн" in query_lower or query_lower == "последнее":
+            selected_image = images[-1]
+        elif "первое" in query_lower or "старое" in query_lower:
+            selected_image = images[0]
+        elif "сгенерир" in query_lower or "нарисован" in query_lower:
+            # Ищем последнее сгенерированное
+            for img in reversed(images):
+                if img['action'] == 'generated':
+                    selected_image = img
+                    break
+            else:
+                return "❌ Нет сгенерированных изображений в контексте"
+        elif "загруж" in query_lower or "прикреп" in query_lower:
+            # Ищем последнее загруженное
+            for img in reversed(images):
+                if img['action'] == 'uploaded':
+                    selected_image = img
+                    break
+            else:
+                return "❌ Нет загруженных изображений в контексте"
+        elif "измен" in query_lower or "модифицир" in query_lower:
+            # Ищем последнее измененное
+            for img in reversed(images):
+                if img['action'] == 'modified':
+                    selected_image = img
+                    break
+            else:
+                return "❌ Нет измененных изображений в контексте"
+        else:
+            # Поиск по ключевым словам в промпте
+            best_match = None
+            for img in reversed(images):
+                if any(word in img['prompt'].lower() for word in query_lower.split()):
+                    best_match = img
+                    break
+            
+            if best_match:
+                selected_image = best_match
+            else:
+                selected_image = images[-1]  # Последнее по умолчанию
+        
+        # Устанавливаем найденное изображение как текущее
+        self.current_image = selected_image['image']
+        
+        logger.info(f"🖼️ Выбрано изображение из контекста: {selected_image['action']} - {selected_image['prompt']}")
+        
+        return f"✅ Выбрано изображение: {selected_image['action']} - '{selected_image['prompt']}'. Теперь можно его анализировать или изменять."
+
+    async def list_images_in_context(self) -> str:
+        """Показать список изображений в контексте"""
+        if not self.current_user_id:
+            return "❌ Ошибка: не указан пользователь"
+            
+        if self.current_user_id not in self.image_context or not self.image_context[self.current_user_id]:
+            return "❌ В контексте нет сохраненных изображений"
+        
+        images = self.image_context[self.current_user_id]
+        
+        result = "📋 Изображения в контексте:\n"
+        for i, img in enumerate(images, 1):
+            action_emoji = {
+                'generated': '🎨',
+                'uploaded': '📤', 
+                'modified': '✏️'
+            }.get(img['action'], '📷')
+            
+            time_ago = int(time.time() - img['timestamp'])
+            if time_ago < 60:
+                time_str = f"{time_ago}с назад"
+            elif time_ago < 3600:
+                time_str = f"{time_ago//60}м назад" 
+            else:
+                time_str = f"{time_ago//3600}ч назад"
+            
+            result += f"{i}. {action_emoji} {img['action']} - '{img['prompt']}' ({time_str})\n"
+        
+        return result
 
 function_manager = FunctionManager() 
