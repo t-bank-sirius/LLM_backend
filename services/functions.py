@@ -76,10 +76,64 @@ class FunctionManager:
         self.current_image: Optional[str] = None
         self.current_user_id: Optional[str] = None
         self.validator = FunctionValidator()
-        self._register_builtin_functions()
         
+        # 🖼️ КОНТЕКСТУАЛЬНАЯ ПАМЯТЬ ИЗОБРАЖЕНИЙ
+        self.image_context: Dict[str, List[Dict]] = {}  # user_id -> список изображений с метаданными
+        self.max_image_context = 5  # Храним последние 5 изображений на пользователя
+        
+        self._register_builtin_functions()
+    
+    def _add_image_to_context(self, user_id: str, image_data: str, prompt: str = "", action: str = "generated"):
+        """Добавить изображение в контекстуальную память"""
+        if user_id not in self.image_context:
+            self.image_context[user_id] = []
+        
+        image_entry = {
+            "image": image_data,
+            "prompt": prompt,
+            "action": action,  # "generated", "uploaded", "modified"
+            "timestamp": time.time()
+        }
+        
+        self.image_context[user_id].append(image_entry)
+        
+        # Ограничиваем количество сохраненных изображений
+        if len(self.image_context[user_id]) > self.max_image_context:
+            self.image_context[user_id] = self.image_context[user_id][-self.max_image_context:]
+        
+        logger.info(f"🖼️ Добавлено изображение в контекст для {user_id}: {action} - {prompt}")
+    
+    def _get_latest_image_from_context(self, user_id: str) -> Optional[str]:
+        """Получить последнее изображение из контекста"""
+        if user_id not in self.image_context or not self.image_context[user_id]:
+            return None
+        
+        latest_image = self.image_context[user_id][-1]
+        logger.info(f"🖼️ Получено последнее изображение из контекста для {user_id}: {latest_image['action']} - {latest_image['prompt']}")
+        return latest_image["image"]
+    
+    def _should_use_context_image(self, user_message: str) -> bool:
+        """Определить, нужно ли использовать изображение из контекста"""
+        context_triggers = [
+            "что на картинке", "опиши изображение", "что там нарисовано", 
+            "что на фото", "опиши картинку", "что это за изображение",
+            "расскажи про картинку", "что вижу", "анализ изображения"
+        ]
+        
+        message_lower = user_message.lower()
+        return any(trigger in message_lower for trigger in context_triggers) and not self.current_image
+    
     def set_current_image(self, image: Optional[str]):
         self.current_image = image
+        
+        # 🖼️ Сохраняем загруженное пользователем изображение в контекст
+        if image and self.current_user_id:
+            self._add_image_to_context(
+                self.current_user_id, 
+                image, 
+                "пользователь загрузил изображение", 
+                "uploaded"
+            )
         
     def set_current_user_id(self, user_id: Optional[str]):
         self.current_user_id = user_id
@@ -89,7 +143,7 @@ class FunctionManager:
         self.schemas[schema.name] = schema
         logger.info(f"✅ Зарегистрирована функция: {schema.name}")
     
-    async def execute_function_safely(self, func_name: str, parameters: Dict[str, Any]) -> FunctionResult:
+    async def execute_function_safely(self, func_name: str, parameters: Dict[str, Any], original_message: str = "") -> FunctionResult:
         start_time = time.time()
         
         function_name_mapping = {}
@@ -120,6 +174,10 @@ class FunctionManager:
         
         try:
             func = self.functions[internal_func_name]
+            
+            # Для describe_image добавляем original_message если есть
+            if func_name == 'describe_image' and original_message:
+                parameters['original_message'] = original_message
             
             if asyncio.iscoroutinefunction(func):
                 if parameters:
@@ -183,11 +241,24 @@ class FunctionManager:
         weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
         return weekdays[datetime.now().weekday()]
     
-    async def describe_image(self, prompt: str = "") -> str:
-        if not self.current_image:
-            return "❌ Изображение не предоставлено в запросе. Для анализа изображения пользователь должен прикрепить изображение к сообщению."
+    async def describe_image(self, prompt: str = "", original_message: str = "") -> str:
+        target_image = self.current_image
+        
+        # 🖼️ УМНАЯ ЛОГИКА: если нет прикрепленного изображения, но запрос похож на анализ - берем из контекста
+        if not target_image and self.current_user_id:
+            # Используем original_message если есть, иначе prompt
+            message_to_check = original_message if original_message else prompt
+            if self._should_use_context_image(message_to_check):
+                context_image = self._get_latest_image_from_context(self.current_user_id)
+                if context_image:
+                    target_image = context_image
+                    logger.info("🖼️ Используем изображение из контекстуальной памяти для анализа")
+        
+        if not target_image:
+            return "❌ Изображение не предоставлено в запросе и не найдено в контексте. Для анализа изображения прикрепите изображение к сообщению или сначала сгенерируйте его."
+        
         try:
-            result = await vlm_client.describe_image(self.current_image, prompt)
+            result = await vlm_client.describe_image(target_image, prompt)
             return result
         except Exception as e:
             return f"❌ Ошибка анализа изображения: {str(e)}"
@@ -205,6 +276,15 @@ class FunctionManager:
         try:
             result = await gen_api.prompt_to_image(prompt, style_key)
             if isinstance(result, dict) and 'image' in result:
+                # 🖼️ Сохраняем сгенерированное изображение в контекст
+                if self.current_user_id and result['image']:
+                    self._add_image_to_context(
+                        self.current_user_id, 
+                        result['image'], 
+                        prompt, 
+                        "generated"
+                    )
+                
                 return {
                     "context_message": f"🖼️ Изображение успешно сгенерировано по запросу: '{prompt}' в стиле '{style_key}'",
                     "image": result['image'],
@@ -233,6 +313,15 @@ class FunctionManager:
         try:
             result = await gen_api.image_to_image(self.current_image, prompt, style_key)
             if isinstance(result, dict) and 'image' in result:
+                # 🖼️ Сохраняем модифицированное изображение в контекст
+                if self.current_user_id and result['image']:
+                    self._add_image_to_context(
+                        self.current_user_id, 
+                        result['image'], 
+                        prompt, 
+                        "modified"
+                    )
+                
                 return {
                     "context_message": f"🖼️ Изображение успешно преобразовано по запросу: '{prompt}' в стиле '{style_key}'",
                     "image": result['image'],
@@ -304,11 +393,11 @@ class FunctionManager:
                 }
             
             generated_prompt = result["result"]["choices"][0]["message"]["content"].strip()
-            image_result = await self.text_to_image(generated_prompt, "3D Cartoon")
+            image_result = await gen_api.create_avatar(generated_prompt)
             
             if image_result.get("success"):
                 return {
-                    "success": True,
+                    "success": True,    
                     "prompt": generated_prompt,
                     "image": image_result.get("image"),
                     "error": None
@@ -583,62 +672,158 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
     async def get_system_prompt_addition(self) -> str:
         return """
 
-🔧 ДОСТУПНЫЕ ФУНКЦИИ:
+🔧 ДОСТУПНЫЕ ФУНКЦИИ И ИНТЕЛЛЕКТУАЛЬНАЯ СИСТЕМА ВЫЗОВОВ:
 
-Для работы с временем:
-- get_current_time() - получить текущее время (ЧЧ:ММ:СС)
-- get_current_date() - получить текущую дату (ГГГГ-ММ-ДД)  
-- get_datetime() - получить дату и время (ГГГГ-ММ-ДД ЧЧ:ММ:СС)
-- get_weekday() - получить день недели (на русском)
+ВАЖНО! Перед вызовом ЛЮБОЙ функции ты ДОЛЖЕН проанализировать ситуацию по следующему алгоритму:
 
-Для работы с изображениями:
-- describe_image(prompt: str = None) - описать прикрепленное изображение (если не передать prompt, то будет описано содержимое изображения)
-- add_face_to_db(text: str) - сохранить лицо с прикрепленного изображения
-- text_to_image(prompt: str, style_key: str) - сгенерировать изображение по описанию
-- image_text_to_image(prompt: str, style_key: str) - преобразовать прикрепленное изображение
-- is_image_attached() - проверить, прикреплено ли изображение к сообщению (для тебя не видно это и так что всегда вызывай эту функцию перед использованием других функций с изображениями что бы быть уверенным что изображение есть)
+═══════════════════════════════════════════════════════════════
+🧠 АЛГОРИТМ ПРИНЯТИЯ РЕШЕНИЙ О ВЫЗОВЕ ФУНКЦИЙ:
 
-Для работы с памятью:
-- save_memory(content: str, context: str = None) - сохранить память в базу данных. Обязательно передавай параметр content. и передавай именно вот так save_memory(content="мое имя степан", context="имя пользователя") то есть с параметром content и context
-- get_memory(query: str) - получить память из базы данных. Обязательно передавай параметр query. и передавай именно вот так get_memory(query="мое имя степан") то есть с параметром query
+1. АНАЛИЗ ЗАПРОСА:
+   - Что именно хочет пользователь?
+   - Есть ли в запросе явные или неявные триггеры функций?
+   - Достаточно ли данных для вызова функции?
 
-ДОСТУПНЫЕ СТИЛИ (style_key):
-• "2D FairyTale" - 2D сказочный стиль, минималистичная иллюстрация
-• "3D FairyTale" - 3D сказочная сцена с магической атмосферой
-• "2D Futuristic Cyberpunk" - 2D киберпанк, дистопия будущего
-• "3D Futuristic Scify" - 3D научная фантастика, футуристичные механизмы
-• "2D Soft Dreamy" - 2D мягкий мечтательный стиль, пастельные тона
-• "3D Soft Dreamy" - 3D мягкий стиль, пушистые текстуры
-• "2D Hyperrealistic" - 2D гиперреалистичный стиль
-• "3D Hyperrealistic" - 3D гиперреалистичный стиль
-• "2D Game Art" - 2D игровой арт, пиксельный стиль
-• "3D Game Art" - 3D игровой арт для видеоигр
-• "2D Cartoon" - 2D мультяшный стиль для детей
-• "3D Cartoon" - 3D мультяшный стиль, красочный
-• "2D Anime" - 2D аниме стиль, большие глаза, яркие цвета
-• "3D Anime" - 3D аниме стиль, стилизованные персонажи
+2. ПРОВЕРКА КОНТЕКСТА:
+   - Проверь память (get_memory) - возможно, нужная информация уже есть
+   - Есть ли в предыдущих сообщениях нужные данные?
 
-ПРАВИЛА ИСПОЛЬЗОВАНИЯ:
-1. Формат вызова: FUNCTION_CALL:имя_функции(параметры)
-2. Примеры:
-   - FUNCTION_CALL:get_current_time()
-   - FUNCTION_CALL:text_to_image("красивый закат", "3D Hyperrealistic")
-   - FUNCTION_CALL:image_text_to_image("добавить снег", "2D Cartoon")
-   - FUNCTION_CALL:describe_image()
-3. Всегда используй точные названия функций и правильный синтаксис
-4. Для функций генерации изображений обязательно указывай style_key из списка
-5. Функции с изображениями работают только если пользователь прикрепил изображение (is_image_attached() возращает True)
+3. ПРИНЯТИЕ РЕШЕНИЯ:
+   - Если данных достаточно → вызывай функцию
+   - Если данных мало → задай уточняющий вопрос
+   - Если запрос неявный → уточни намерения пользователя
 
-ВАЖНО: 
- 
-- Почти всегда используй функцию save_memory для сохранения памяти, если пользователь просит сохранить что-то в память или ты так считаешь что это нужно сохранить
-- Всегда используй функцию get_memory для получения памяти, если ты считаешь что это нужно для ответа, то есть почти всегда для улучшения контекста
-- Вызывай функции всегда когда требуется для ответа и не выдумывай и не предполагай что это не нужно
-- При ошибках функций объясни пользователю причину и как исправить
-- Не предлагать пользователю использовать функции настойчиво, если он не просил о них рассказать
-- Не используй из контекста результаты выполнения функций, вместо их вызова"""
+4. ОБОСНОВАНИЕ:
+   - Кратко объясни, почему вызываешь именно эту функцию
+   - Укажи, откуда взял параметры
 
-    async def parse_and_execute(self, text: str) -> tuple[str, List[str], Dict]:
+═══════════════════════════════════════════════════════════════
+
+📋 ФУНКЦИИ ПО КАТЕГОРИЯМ:
+
+🕐 ВРЕМЯ И ДАТА:
+- get_current_time() - текущее время (ЧЧ:ММ:СС)
+- get_current_date() - текущая дата (ГГГГ-ММ-ДД)  
+- get_datetime() - дата и время (ГГГГ-ММ-ДД ЧЧ:ММ:СС)
+- get_weekday() - день недели (на русском)
+
+ТРИГГЕРЫ: "время", "который час", "сколько времени", "какое сегодня число", "какой день", "дата"
+
+🖼️ РАБОТА С ИЗОБРАЖЕНИЯМИ:
+- is_image_attached() - проверить наличие изображения (ВСЕГДА вызывай первой!)
+- describe_image(prompt: str = "") - описать изображение
+- add_face_to_db(text: str) - сохранить лицо в базу
+- text_to_image(prompt: str, style_key: str) - генерация изображения
+- image_text_to_image(prompt: str, style_key: str) - изменение изображения
+
+ТРИГГЕРЫ: "картинка", "изображение", "фото", "нарисуй", "покажи", "сгенерируй", "создай изображение", "что на фото"
+
+🧠 ПАМЯТЬ:
+- save_memory(content: str, context: str = "") - сохранить в память
+- get_memory(query: str) - найти в памяти
+
+ТРИГГЕРЫ: "запомни", "сохрани", "помнишь", "как меня зовут", "мои данные", "что я говорил"
+
+═══════════════════════════════════════════════════════════════
+
+✅ ПРИМЕРЫ ПРАВИЛЬНЫХ ДЕЙСТВИЙ:
+
+🔹 Пользователь: "Сколько времени?"
+   Мышление: Явный запрос времени → вызываю get_current_time()
+   Действие: FUNCTION_CALL:get_current_time()
+
+🔹 Пользователь: "Нарисуй кота в мультяшном стиле"
+   Мышление: Есть описание (кот) + стиль (мультяшный) → text_to_image
+   Действие: FUNCTION_CALL:text_to_image(prompt="кот", style_key="3D Cartoon")
+
+🔹 Пользователь: "Что на этом фото?" (с изображением)
+   Мышление: Запрос анализа изображения → сначала проверяю наличие, потом анализирую
+   Действия: 
+   1. FUNCTION_CALL:is_image_attached()
+   2. FUNCTION_CALL:describe_image()
+
+🔹 Пользователь: "Запомни, что меня зовут Иван"
+   Мышление: Явный запрос сохранения → save_memory
+   Действие: FUNCTION_CALL:save_memory(content="меня зовут Иван", context="имя пользователя")
+
+🔹 Пользователь: "Как меня зовут?"
+   Мышление: Нужна информация из памяти → get_memory
+   Действие: FUNCTION_CALL:get_memory(query="имя пользователя")
+
+═══════════════════════════════════════════════════════════════
+
+❌ ПРИМЕРЫ НЕПРАВИЛЬНЫХ ДЕЙСТВИЙ И ИХ ИСПРАВЛЕНИЯ:
+
+🔸 НЕПРАВИЛЬНО:
+   Пользователь: "Привет!"
+   Неправильно: FUNCTION_CALL:get_current_time() (зачем время?)
+   Правильно: Просто поприветствовать, функции не нужны
+
+🔸 НЕПРАВИЛЬНО:
+   Пользователь: "Сделай картинку"
+   Неправильно: FUNCTION_CALL:text_to_image(prompt="", style_key="3D Cartoon")
+   Правильно: "Что нарисовать? Опишите, какое изображение вы хотите"
+
+🔸 НЕПРАВИЛЬНО:
+   Пользователь: "Расскажи про себя"
+   Неправильно: FUNCTION_CALL:get_memory(query="про себя")
+   Правильно: Рассказать о своих возможностях, функции не нужны
+
+🔸 НЕПРАВИЛЬНО:
+   Пользователь: "Измени это фото" (без фото)
+   Неправильно: FUNCTION_CALL:image_text_to_image(...)
+   Правильно: "Пожалуйста, прикрепите изображение для обработки"
+
+═══════════════════════════════════════════════════════════════
+
+🎯 ДОСТУПНЫЕ СТИЛИ (style_key):
+• "2D FairyTale" - 2D сказочный стиль
+• "3D FairyTale" - 3D сказочная сцена
+• "2D Futuristic Cyberpunk" - 2D киберпанк
+• "3D Futuristic Scify" - 3D научная фантастика
+• "2D Soft Dreamy" - 2D мягкий мечтательный стиль
+• "3D Soft Dreamy" - 3D мягкий стиль
+• "2D Hyperrealistic" - 2D гиперреалистичный
+• "3D Hyperrealistic" - 3D гиперреалистичный
+• "2D Game Art" - 2D игровой арт
+• "3D Game Art" - 3D игровой арт
+• "2D Cartoon" - 2D мультяшный стиль
+• "3D Cartoon" - 3D мультяшный стиль (по умолчанию)
+• "2D Anime" - 2D аниме стиль
+• "3D Anime" - 3D аниме стиль
+
+═══════════════════════════════════════════════════════════════
+
+🚨 КРИТИЧЕСКИ ВАЖНЫЕ ПРАВИЛА:
+
+1. ВСЕГДА проверяй память перед ответом: FUNCTION_CALL:get_memory(query="релевантный запрос")
+
+2. ДЛЯ ИЗОБРАЖЕНИЙ: сначала FUNCTION_CALL:is_image_attached(), потом другие функции
+
+3. НЕ ВЫЗЫВАЙ функции "на всякий случай" - только если это явно нужно
+
+4. ВСЕГДА уточняй недостающие параметры перед вызовом функции
+
+5. СОХРАНЯЙ важную информацию: имена, предпочтения, факты о пользователе
+
+6. Формат вызова: FUNCTION_CALL:имя_функции(параметры)
+
+7. ОБЪЯСНЯЙ свои действия: "Проверяю память...", "Генерирую изображение..."
+
+═══════════════════════════════════════════════════════════════
+
+💡 ЭВРИСТИКИ ДЛЯ РАСПОЗНАВАНИЯ НЕЯВНЫХ ЗАПРОСОВ:
+
+• "покажи", "продемонстрируй" + описание → text_to_image
+• "что это", "опиши" + изображение → describe_image  
+• "помнишь", "я говорил" → get_memory
+• "сейчас", "теперь", "в данный момент" → время/дата
+• "запиши", "не забудь" → save_memory
+• вопросы о личной информации → сначала get_memory
+
+ПОМНИ: Лучше уточнить, чем вызвать функцию неправильно!"""
+
+    async def parse_and_execute(self, text: str, original_user_message: str = "") -> tuple[str, List[str], Dict]:
         pattern = r'FUNCTION_CALL:([\w-]+)\(([^)]*)\)'
         matches = re.findall(pattern, text)
 
@@ -672,7 +857,7 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
                             if len(param_matches) >= 2:
                                 parameters['style_key'] = param_matches[1]
                 
-                result = await self.execute_function_safely(function_name, parameters)
+                result = await self.execute_function_safely(function_name, parameters, original_user_message)
                 
                 functions_used.append(function_name)
                 function_results[function_name] = result.result
@@ -688,7 +873,7 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
                 else:
                     results_output.append(f"❌ {function_name}: {result.error}")
                     logger.error(f"❌ Ошибка функции {function_name}: {result.error}")
-                        
+                         
             except Exception as e:
                 error_msg = f"Ошибка обработки вызова функции {function_name}: {str(e)}"
                 logger.error(f"❌ {error_msg}")

@@ -76,7 +76,7 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
             
             function_manager.set_current_user_id(user_id)
             
-            processed_text, functions_used, function_results = await function_manager.parse_and_execute(raw_content)
+            processed_text, functions_used, function_results = await function_manager.parse_and_execute(raw_content, request.message)
             
             all_functions_used.extend(functions_used)
             all_function_results.update(function_results)
@@ -186,12 +186,12 @@ async def generate(request: GenerateRequest):
         
         context = await context_manager.get_or_create_context(request.user_id, request.role)
         
-        images = []
+        image = None
         for func_name, func_result in result["function_results"].items():
             if func_name in ['text_to_image', 'image-text-to-image'] and isinstance(func_result, dict):
                 image_data = func_result.get('image')
                 if image_data:
-                    images.append(image_data)
+                    image = image_data
         
         return GenerateResponse(
             message=text_result,
@@ -200,7 +200,7 @@ async def generate(request: GenerateRequest):
             role=request.role,
             function_calls=result["functions_used"],
             function_results=result["function_results"],
-            images=images,
+            image=image,
             generation_time=result["processing_time"],
             message_count=len(context.messages),
             model_used=result["model"],

@@ -23,7 +23,7 @@ VLLM_TIMEOUT = int(os.getenv("VLLM_TIMEOUT", "120"))
 VLM_API_URL =  "http://host.docker.internal:8001"
 
 # gen
-GEN_API_URL =  "http://host.docker.internal:8003"
+GEN_API_URL =  "http://localhost:8003"
 
 # memory    
 MEMORY_API_URL = "http://host.docker.internal:8006"
@@ -154,6 +154,19 @@ class GenAPI:
                     return await response.json()
         except:
             return 'Произошла ошибка при генерации изображения'
+        
+
+    async def create_avatar(self, prompt: str) -> Dict[str, Any]:
+        payload = {"prompt": prompt}
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(f"{self.api_url}/create_avatar", json=payload) as response:
+                    print(await response.json())
+                    return await response.json()
+        except:
+            return 'Произошла ошибка при генерации изображения'
+        
         
 class MemoryAPI:
     def __init__(self, api_url: str, timeout: int = 120):
