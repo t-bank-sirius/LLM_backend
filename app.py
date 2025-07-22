@@ -9,6 +9,7 @@ from core.models import *
 from core.context import context_manager, Message
 
 from services.functions import function_manager
+from check_swear import SwearingCheck
 
 from client import vllm_client, VLLM_API_URL, VLLM_MODEL
 
@@ -29,7 +30,6 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
     
     context = await context_manager.get_or_create_context(user_id, role)
     
-    # Полностью формируем системный промпт, включая промпт персонажа
     full_system_prompt = await function_manager.get_system_prompt_addition(system_prompt)
     await context_manager.add_or_update_system_message(user_id, full_system_prompt, role)
     
@@ -44,6 +44,8 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
     iteration_count = 0
     
     current_messages = messages.copy()
+    swearing_check = SwearingCheck(reg_pred=True, bins=3)
+    toxic_prompt = "Твой ответ содержит ненормативную лексику. Перегенерируй его без мата и оскорблений. Не используй мат в ответе. "
     
     while iteration_count < max_iterations:
         iteration_count += 1
@@ -66,6 +68,15 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
         raw_content = message.get("content", "")
         reasoning_content = message.get("reasoning_content", "")
 
+        probas = swearing_check.predict_proba([raw_content])
+        if probas and probas[-1] > 0.5:
+            logger.warning(f"⚠️ LLM сгенерировал токсичный ответ, добавляю system-промпт для перегенерации.")
+            current_messages.append({
+                "role": "system",
+                "content": toxic_prompt
+            })
+            continue
+
         is_need_functions = await function_manager.is_need_functions(raw_content)
         
         if is_need_functions:
@@ -79,6 +90,18 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
             all_function_results.update(function_results)
             
             content_without_calls = await function_manager.remove_function_calls(raw_content)
+            
+            # Проверка токсичности после удаления function calls
+            probas2 = swearing_check.predict_proba([content_without_calls])
+            if probas2 and probas2[-1] > 0.5:
+                logger.warning(f"⚠️ LLM сгенерировал токсичный ответ (после удаления function calls), добавляю system-промпт для перегенерации.")
+                current_messages.append({
+                    "role": "system",
+                    "content": toxic_prompt
+                })
+                continue
+
+            print(content_without_calls)
             
             current_messages.append({
                 "role": "assistant", 
@@ -104,6 +127,12 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
     processing_time = time.time() - start_time
     clean_final_content = await function_manager.remove_function_calls(final_content)
     
+    # Проверка токсичности на самом финальном тексте
+    probas3 = swearing_check.predict_proba([clean_final_content])
+    if probas3 and probas3[-1] > 0.5:
+        clean_final_content = "К сожалению, не могу такое выдать, потому что это содержит ненормативную лексику."
+        logger.warning(f"⚠️ LLM сгенерировал токсичный ответ (финальная проверка), отправлен отказ пользователю.")
+
     function_manager.set_current_image(None)
     function_manager.set_current_user_id(None)
     
@@ -343,6 +372,13 @@ async def create_characters(request: CreateCharactersRequest):
             error=f"Ошибка создания персонажа: {str(e)}"
         )
 
+@app.post("/delete_context", response_model=ClearContextResponse)
+async def delete_context(request: ClearContextRequest):
+    await context_manager.clear_context(request.user_id, request.role)
+    return ClearContextResponse(
+        success=True,
+        message=f"Контекст пользователя {request.user_id} успешно очищен"
+    )
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8081)

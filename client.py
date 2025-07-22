@@ -14,18 +14,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-VLLM_API_URL = "http://host.docker.internal:8008" #os.getenv("VLLM_API_URL", "http://localhost:8000")
-VLLM_MODEL = os.getenv("VLLM_MODEL", "matvei")
-VLLM_TIMEOUT = int(os.getenv("VLLM_TIMEOUT", "120"))
+VLLM_API_URL = "http://llm-model:8000"
+VLLM_MODEL = "/model" 
+VLLM_TIMEOUT = 120
 
 # vlm
-VLM_API_URL =  "http://host.docker.internal:8001"
+VLM_API_URL =  "http://vlm:8001"
 
 # gen
-GEN_API_URL =  "http://host.docker.internal:8003"
+GEN_API_URL =  "http://image-gen:8003"
 
 # memory    
-MEMORY_API_URL = "http://host.docker.internal:8006"
+MEMORY_API_URL = "http://ltm-api:8006"
+
+
 class VLLMClient:
     def __init__(self, api_url: str, model: str, timeout: int = 120):
         self.api_url = api_url
@@ -162,16 +164,13 @@ class GenAPI:
                     return await response.json()
         except:
             return 'Произошла ошибка при генерации изображения'
-    
-        
 
     async def create_avatar(self, prompt: str) -> Dict[str, Any]:
-        payload = {"prompt": prompt}
+        payload = {"prompt": prompt + "A cute 3D character portrait in Pixar Disney style, soft lighting, big expressive eyes, friendly smile, pastel colors, upper body shot, studio background", "style_key": ""}
 
         try:
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(f"{self.api_url}/create_avatar", json=payload) as response:
-                    print(await response.json())
+                async with session.post(f"{self.api_url}/generate_from_text", json=payload) as response:
                     return await response.json()
         except:
             return 'Произошла ошибка при генерации изображения'

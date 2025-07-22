@@ -150,28 +150,22 @@ class ContextManager:
         
         return context
     
-    async def clear_context(self, user_id: str, role: str = None):
-        if role is None:
-            keys_to_remove = [key for key in self.contexts.keys() if key.startswith(f"{user_id}_")]
-            for key in keys_to_remove:
-                context = self.contexts[key]
-                del self.contexts[key]
-                
-                file_path = self._get_file_path(context.user_id, context.role)
-                if file_path.exists():
-                    file_path.unlink()
-                
-                logger.info(f"🗑️ Очищен контекст {key}")
-        else:
-            context_key = self._get_context_key(user_id, role)
-            if context_key in self.contexts:
-                del self.contexts[context_key]
-                
-                file_path = self._get_file_path(user_id, role)
-                if file_path.exists():
-                    file_path.unlink()
-                
-                logger.info(f"🗑️ Очищен контекст {context_key}")
+    async def clear_context(self, user_id: str, role: str):
+        context_key = self._get_context_key(user_id, role)
+
+        if context_key in self.contexts:
+            self.contexts.pop(context_key, None)
+  
+        file_path = self._get_file_path(user_id, role)
+        try:
+            if file_path.exists():
+                file_path.unlink()
+                logger.info(f"🗑️ Файл контекста {file_path} удалён")
+            else:
+                logger.info(f"🗑️ Файл контекста {file_path} не найден для удаления")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при удалении файла контекста {file_path}: {e}")
+        logger.info(f"🗑️ Очищен контекст {context_key}")
     
     async def get_context_info(self, user_id: str, role: str = None) -> Optional[Dict]:
         if role is None:    

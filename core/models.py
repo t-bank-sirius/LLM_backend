@@ -64,7 +64,6 @@ class ClearContextRequest(BaseModel):
     role: Optional[str] = Field(None, description="Роль/персонаж (если не указана - все роли)")
 
 class ClearContextResponse(BaseModel):
-    user_id: str = Field(..., description="Идентификатор пользователя")
     success: bool = Field(..., description="Успешность операции")
     message: str = Field(..., description="Сообщение")
 
