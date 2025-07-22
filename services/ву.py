@@ -1,7 +1,7 @@
 import requests
 import json
 
-url = "http://localhost:8080/create_avatar"
+url = "http://localhost:8081/create_avatar"
 
 payload = json.dumps({
   "json_data": """{

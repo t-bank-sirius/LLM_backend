@@ -199,6 +199,15 @@ class MemoryAPI:
         except:
             return 'Произошла ошибка при сохранении памяти'
         
+    async def get_face_from_db(self, user_id: str, name: str):
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(f"{self.api_url}/get_face", json={"user_id": user_id, "name": name}) as response:
+                    return await response.json()
+        except:
+            return 'Произошла ошибка при сохранении памяти'
+    
+
 vllm_client = VLLMClient(VLLM_API_URL, VLLM_MODEL, VLLM_TIMEOUT)
 
 vlm_client = VLMClient(VLM_API_URL, VLLM_TIMEOUT)
