@@ -29,12 +29,9 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
     
     context = await context_manager.get_or_create_context(user_id, role)
     
-    await context_manager.add_or_update_system_message(user_id, system_prompt + await function_manager.get_system_prompt_addition(), role)
-    
-    function_manager.set_current_image(request.image)
-    
-    if request.image:
-        logger.info(f"🖼️ Изображение прикреплено и доступно для функций")
+    # Полностью формируем системный промпт, включая промпт персонажа
+    full_system_prompt = await function_manager.get_system_prompt_addition(system_prompt)
+    await context_manager.add_or_update_system_message(user_id, full_system_prompt, role)
     
     logger.info(f"🔄 Генерация для {user_id} (роль: {role})")
     
@@ -76,7 +73,7 @@ async def generate_with_functions(user_id: str, role: str, system_prompt: str, r
             
             function_manager.set_current_user_id(user_id)
             
-            processed_text, functions_used, function_results = await function_manager.parse_and_execute(raw_content, request.message)
+            processed_text, functions_used, function_results = await function_manager.parse_and_execute(raw_content)
             
             all_functions_used.extend(functions_used)
             all_function_results.update(function_results)
@@ -165,6 +162,10 @@ async def health():
 @app.post("/generate", response_model=GenerateResponse)
 async def generate(request: GenerateRequest):
     try:
+        function_manager.set_current_user_id(request.user_id)
+        if request.image:
+            function_manager.set_current_image(request.image)
+
         logger.info(f"📝 Запрос от {request.user_id} (роль: {request.role})")
 
         await context_manager.add_user_message(request.user_id, request.message, request.role)
@@ -188,7 +189,7 @@ async def generate(request: GenerateRequest):
         
         image = None
         for func_name, func_result in result["function_results"].items():
-            if func_name in ['text_to_image', 'image-text-to-image'] and isinstance(func_result, dict):
+            if func_name in ['text_to_image', 'image_text_to_image', "sketch_to_image"] and isinstance(func_result, dict):
                 image_data = func_result.get('image')
                 if image_data:
                     image = image_data

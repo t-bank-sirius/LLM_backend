@@ -14,8 +14,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# vllm
-VLLM_API_URL = os.getenv("VLLM_API_URL", "http://localhost:8000")
+VLLM_API_URL = "http://host.docker.internal:8008" #os.getenv("VLLM_API_URL", "http://localhost:8000")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "matvei")
 VLLM_TIMEOUT = int(os.getenv("VLLM_TIMEOUT", "120"))
 
@@ -23,11 +22,10 @@ VLLM_TIMEOUT = int(os.getenv("VLLM_TIMEOUT", "120"))
 VLM_API_URL =  "http://host.docker.internal:8001"
 
 # gen
-GEN_API_URL =  "http://localhost:8003"
+GEN_API_URL =  "http://host.docker.internal:8003"
 
 # memory    
 MEMORY_API_URL = "http://host.docker.internal:8006"
-
 class VLLMClient:
     def __init__(self, api_url: str, model: str, timeout: int = 120):
         self.api_url = api_url
@@ -154,6 +152,17 @@ class GenAPI:
                     return await response.json()
         except:
             return 'Произошла ошибка при генерации изображения'
+        
+    async def sketch_to_image(self, image_bs64: str, prompt: str) -> Dict[str, Any]:
+        payload = {"image": image_bs64, "prompt": prompt}
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(f"{self.api_url}/sketch_to_image", json=payload) as response:
+                    return await response.json()
+        except:
+            return 'Произошла ошибка при генерации изображения'
+    
         
 
     async def create_avatar(self, prompt: str) -> Dict[str, Any]:
