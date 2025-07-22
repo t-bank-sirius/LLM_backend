@@ -754,22 +754,30 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
         images_info = ""
         if self.current_user_id:
             images = self.image_context.get(self.current_user_id, [])
-            if images:
+            if images and (self.current_image is None or self.current_image_id is None):
                 last_img = images[-1]
-                
-                if last_img['action'] == 'uploaded':
-                    images_info = "\n📷 есть загруженное изображение!\n"
-                elif last_img['action'] == 'generated':
-                    images_info = "\n🖼️ есть сгенерированное изображение!\n"
-                elif last_img['action'] == 'modified':
-                    images_info = "\n🎨 есть измененное изображение!\n"
-                elif last_img['action'] == 'described':
-                    images_info = "\n🔍 есть описание изображения!\n"
-                elif last_img['action'] == 'saved':
-                    images_info = "\n👤 есть лицо с этого изображения в базе!\n"
-                else:
-                    images_info = "\n📋 есть изображение в контексте!\n"
-                images_info += "\nФотка уже есть и доступна для работы с функциями\n"
+                self.current_image = last_img['image']
+                self.current_image_id = last_img['id']
+            if images:
+                images_info = "\n📋 Картинки в контексте пользователя:\n"
+                for img in images:
+                    action = img.get('action', 'context')
+                    prompt = img.get('prompt', '')
+                    desc = ""
+                    if action == 'uploaded':
+                        desc = f"Загружена пользователем. Описание при загрузке: '{prompt}'"
+                    elif action == 'generated':
+                        desc = f"Сгенерирована по промпту: '{prompt}'"
+                    elif action == 'modified':
+                        desc = f"Изменена по промпту: '{prompt}'"
+                    elif action == 'described':
+                        desc = f"Описана: '{prompt}'"
+                    elif action == 'saved':
+                        desc = f"Лицо сохранено с описанием: '{prompt}'"
+                    else:
+                        desc = f"Действие: {action}, описание: '{prompt}'"
+                    images_info += f"id={img['id']}: {desc}\n"
+                images_info += "\nФотки доступны для работы с функциями\n"
             else:
                 images_info = "\n📋 Пока нет загруженных изображений. Прикрепи фото или нарисуй что-нибудь!\n"
         else:
@@ -777,14 +785,18 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
 
         current_image_info = ""
         if self.current_image and self.current_image_id:
-            current_image_info = "\n🎯 Сейчас выбрано изображение\n"
+            current_image_info = f"\n🎯 Сейчас выбрано изображение id={self.current_image_id}\n"
         else:
             current_image_info = "\n🎯 Изображение не выбрано\n"
         current_image_info += "\nФотка уже выбрана и доступна для работы с функциями\n"
         return (images_info, current_image_info)
     
     async def get_system_prompt_addition(self, character_prompt: str) -> str:
-        images_info, current_image_info = await self.get_images_info()
+        images_info, f = await self.get_images_info()
+        
+        imag = await self.list_images_in_context()
+
+        print("s", images_info, f, imag)
         system_prompt = f"""
 Внимательно следуй стилю написания и поведению персонажа, но И ТАКЖЕ ВНИМАТЕЛЬНО СЛЕДУЙ ПРАВИЛАМ ВЫЗОВА ФУНКЦИЙ.
 [ХАРАКТЕР_И_СТИЛЬ_ПЕРСОНАЖА]  
@@ -835,7 +847,7 @@ SUBTITLE: [короткий подзаголовок персонажа]"""
 
 [ИНФОРМАЦИЯ_О_КОНТЕКСТЕ_ИЗОБРАЖЕНИЙ]
 {images_info}
-{current_image_info}
+{imag}
 
 [ДОСТУПНЫЕ_ФУНКЦИИ_И_ПРИМЕРЫ_ИСПОЛЬЗОВАНИЯ]
 
