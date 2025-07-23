@@ -101,23 +101,23 @@ class VLMClient:
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         logger.info(f"🚀 vlm клиент: {api_url}")
 
-    async def describe_image(self, image_bs64: str, prompt: str = "") -> str:
+    async def describe_image(self, image_bs64: str, prompt: str = "", user_id: str = "") -> str:
         try:
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 async with session.post(
                     f"{self.api_url}/analyze",
-                    json={"image_base64": image_bs64, "prompt": prompt}
+                    json={"image_base64": image_bs64, "prompt": prompt, "user_id": user_id}
                 ) as response:
                     return await response.text()
         except:
             return 'Произошла ошибка при описании изображения'
 
-    async def save_face_to_db(self, face_bs64: str, text: str) -> str:
+    async def save_face_to_db(self, face_bs64: str, text: str, user_id: str) -> str:
         try:
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 async with session.post(
                     f"{self.api_url}/add",
-                    json={"image_base64": face_bs64, "comment": text}
+                    json={"image_base64": face_bs64, "comment": text, "user_id": user_id}
                 ) as response:
                     return await response.text()
         except:

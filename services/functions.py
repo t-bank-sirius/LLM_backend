@@ -234,7 +234,7 @@ class FunctionManager:
             return "❌ Изображение не выбрано. Сначала используй select_image_by_id(id=...) для выбора нужного изображения."
         
         try:
-            result = await vlm_client.describe_image(self.current_image, prompt)
+            result = await vlm_client.describe_image(self.current_image, prompt, self.current_user_id)
 
             if isinstance(result, dict):
                 if self.current_user_id and result.get('image'):
@@ -253,7 +253,7 @@ class FunctionManager:
         if not self.current_image:
             return "❌ Изображение не предоставлено в запросе. Для сохранения лица пользователь должен прикрепить изображение к сообщению."
         try:
-            result = await vlm_client.save_face_to_db(self.current_image, text)
+            result = await vlm_client.save_face_to_db(self.current_image, text, self.current_user_id)
 
             if self.current_user_id and result['image']:
                 self._add_image_to_context(
