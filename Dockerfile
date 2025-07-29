@@ -4,6 +4,13 @@ ARG USERNAME=llmuser
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 
+ENV PATH="/home/$USERNAME/.local/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV VLLM_API_URL=http://localhost:8000
+ENV VLLM_MODEL=matvei_pzh
+ENV VLLM_TIMEOUT=120
+
+
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME
 
@@ -27,13 +34,6 @@ COPY --chown=$USERNAME:$USERNAME client.py ./
 COPY --chown=$USERNAME:$USERNAME app.py ./
 
 RUN mkdir -p /app/user_contexts
-
-ENV PATH="/home/$USERNAME/.local/bin:$PATH"
-
-ENV PYTHONUNBUFFERED=1
-ENV VLLM_API_URL=http://localhost:8000
-ENV VLLM_MODEL=matvei_pzh
-ENV VLLM_TIMEOUT=120
 
 EXPOSE 8080
 

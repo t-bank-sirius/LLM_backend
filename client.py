@@ -119,7 +119,7 @@ class VLMClient:
                     f"{self.api_url}/add",
                     json={"image_base64": face_bs64, "comment": text, "user_id": user_id}
                 ) as response:
-                    return await response.text()
+                    return await response.json()
         except:
             return 'Произошла ошибка при сохранении изображения лица в базу данных'
 
@@ -202,7 +202,7 @@ class MemoryAPI:
     async def get_face_from_db(self, user_id: str, name: str):
         try:
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(f"{self.api_url}/get_face", json={"user_id": user_id, "name": name}) as response:
+                async with session.post(f"{self.api_url}/find_face", json={"user_id": user_id, "query": name}) as response:
                     return await response.json()
         except:
             return 'Произошла ошибка при сохранении памяти'
