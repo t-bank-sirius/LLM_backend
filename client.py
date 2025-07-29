@@ -14,18 +14,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-VLLM_API_URL = "http://llm-model:8000"
-VLLM_MODEL = "/model" 
-VLLM_TIMEOUT = 120
+VLLM_API_URL = os.getenv('VLLM_API_URL')
+VLLM_MODEL = os.getenv('VLLM_MODEL')
+VLLM_TIMEOUT = os.getenv('VLLM_TIMEOUT')
 
 # vlm
-VLM_API_URL =  "http://vlm:8001"
+VLM_API_URL = os.getenv('VLM_API_URL')
 
 # gen
-GEN_API_URL =  "http://image-gen:8003"
+GEN_API_URL = os.getenv('GEN_API_URL')
 
 # memory    
-MEMORY_API_URL = "http://ltm-api:8006"
+MEMORY_API_URL = os.getenv('MEMORY_API_URL')
 
 
 class VLLMClient:
